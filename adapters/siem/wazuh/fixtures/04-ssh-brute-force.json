@@ -1,0 +1,40 @@
+{
+  "_fixture": {
+    "id": "04",
+    "name": "ssh-brute-force",
+    "purpose": "Correlated brute-force alert — valid user, single source",
+    "synthesized": true,
+    "expected_rule_id": "5712",
+    "expected_level": 10,
+    "expected_outcome": "Correlated alert fires (5712); references prior 5760 events; same source IP, same user"
+  },
+  "timestamp": "2026-10-14T09:19:58.204Z",
+  "rule": {
+    "id": "5712",
+    "level": 10,
+    "description": "sshd: brute force trying to get access to the system. Authentication failed.",
+    "groups": ["syslog", "sshd", "authentication_failed"],
+    "frequency": 8,
+    "timeframe": 240
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-server-01",
+    "ip": "10.0.1.15"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "id": "1730000398.483240",
+  "full_log": "Oct 14 09:19:58 web-server-01 sshd[25188]: Failed password for deploy from 203.0.113.47 port 51544 ssh2",
+  "data": {
+    "srcip": "203.0.113.47",
+    "srcport": "51544",
+    "dstuser": "deploy",
+    "protocol": "ssh2"
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "location": "/var/log/auth.log"
+}

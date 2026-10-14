@@ -1,0 +1,39 @@
+{
+  "_fixture": {
+    "id": "09",
+    "name": "ssh-bruteforce-multi-source",
+    "purpose": "Correlation negative control — same user, multiple source IPs. Stock Wazuh 5712 keys on srcip and does NOT fire.",
+    "synthesized": true,
+    "expected_rule_id": "5760",
+    "expected_level": 5,
+    "expected_outcome": "NO 5712 correlation. Individual 5760 alerts fire only. Canonical_case must NOT group these into a single case by srcip alone.",
+    "notes": "This is the false-negative that motivates user-centric grouping in canonical_case.yaml. If your ruleset is tuned to correlate by target_user, this fixture's expected outcome changes — document the tuning explicitly. If 5712 is expected to fire, change expected_rule_id and expected_level here, and add frequency/timeframe to the rule block."
+  },
+  "timestamp": "2026-10-14T09:31:55.602Z",
+  "rule": {
+    "id": "5760",
+    "level": 5,
+    "description": "sshd: authentication failed.",
+    "groups": ["syslog", "sshd", "authentication_failed"]
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-server-01",
+    "ip": "10.0.1.15"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "id": "1730001115.484010",
+  "full_log": "Oct 14 09:31:55 web-server-01 sshd[25890]: Failed password for deploy from 192.0.2.88 port 51944 ssh2",
+  "data": {
+    "srcip": "192.0.2.88",
+    "srcport": "51944",
+    "dstuser": "deploy",
+    "protocol": "ssh2"
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "location": "/var/log/auth.log"
+}

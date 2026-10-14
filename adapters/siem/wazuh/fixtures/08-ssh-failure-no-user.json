@@ -1,0 +1,37 @@
+{
+  "_fixture": {
+    "id": "08",
+    "name": "ssh-failure-no-user",
+    "purpose": "Field variation — dstuser absent; degraded parse",
+    "synthesized": true,
+    "expected_rule_id": "5760",
+    "expected_level": 5,
+    "expected_outcome": "Alert fires but target_user is unresolvable; canonical schema must allow target_user to be optional OR nullable"
+  },
+  "timestamp": "2026-10-14T09:28:12.945Z",
+  "rule": {
+    "id": "5760",
+    "level": 5,
+    "description": "sshd: authentication failed.",
+    "groups": ["syslog", "sshd", "authentication_failed"]
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-server-01",
+    "ip": "10.0.1.15"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "id": "1730000892.483844",
+  "full_log": "Oct 14 09:28:12 web-server-01 sshd[25714]: Failed password from 203.0.113.47 port 51801 ssh2",
+  "data": {
+    "srcip": "203.0.113.47",
+    "srcport": "51801",
+    "protocol": "ssh2"
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "location": "/var/log/auth.log"
+}

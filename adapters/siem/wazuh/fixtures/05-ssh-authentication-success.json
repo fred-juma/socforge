@@ -1,0 +1,38 @@
+{
+  "_fixture": {
+    "id": "05",
+    "name": "ssh-authentication-success",
+    "purpose": "Negative control — must NOT classify as failure",
+    "synthesized": true,
+    "expected_rule_id": "5715",
+    "expected_level": 3,
+    "expected_outcome": "Success alert fires (5715); event_type must be authentication_success, not failure"
+  },
+  "timestamp": "2026-10-14T09:22:16.559Z",
+  "rule": {
+    "id": "5715",
+    "level": 3,
+    "description": "sshd: authentication success.",
+    "groups": ["syslog", "sshd", "authentication_success"]
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-server-01",
+    "ip": "10.0.1.15"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "id": "1730000536.483402",
+  "full_log": "Oct 14 09:22:16 web-server-01 sshd[25340]: Accepted password for deploy from 203.0.113.47 port 51620 ssh2",
+  "data": {
+    "srcip": "203.0.113.47",
+    "srcport": "51620",
+    "dstuser": "deploy",
+    "protocol": "ssh2"
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "location": "/var/log/auth.log"
+}

@@ -1,0 +1,46 @@
+{
+  "_fixture": {
+    "id": "10",
+    "name": "ssh-alert-with-mitre",
+    "purpose": "Enrichment variation — alert carries MITRE ATT&CK metadata",
+    "synthesized": true,
+    "expected_rule_id": "5712",
+    "expected_level": 10,
+    "expected_outcome": "Correlated alert fires with MITRE block populated; canonical schema must allow enrichment fields to be optional"
+  },
+  "timestamp": "2026-10-14T09:34:08.117Z",
+  "rule": {
+    "id": "5712",
+    "level": 10,
+    "description": "sshd: brute force trying to get access to the system. Authentication failed.",
+    "groups": ["syslog", "sshd", "authentication_failed"],
+    "frequency": 8,
+    "timeframe": 240,
+    "mitre": {
+      "id": ["T1110"],
+      "tactic": ["Credential Access"],
+      "technique": ["Brute Force"]
+    }
+  },
+  "agent": {
+    "id": "001",
+    "name": "web-server-01",
+    "ip": "10.0.1.15"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "id": "1730001248.484188",
+  "full_log": "Oct 14 09:34:08 web-server-01 sshd[26011]: Failed password for invalid user jenkins from 203.0.113.91 port 52017 ssh2",
+  "data": {
+    "srcuser": "jenkins",
+    "dstuser": "jenkins",
+    "srcip": "203.0.113.91",
+    "srcport": "52017",
+    "protocol": "ssh2"
+  },
+  "decoder": {
+    "name": "sshd"
+  },
+  "location": "/var/log/auth.log"
+}

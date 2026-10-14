@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: socforge-postgres
+    environment:
+      POSTGRES_USER: socforge
+      POSTGRES_PASSWORD: socforge
+      POSTGRES_DB: socforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../shared/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U socforge -d socforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  core:
+    build:
+      context: ../..
+      dockerfile: core/api/Dockerfile
+    container_name: socforge-core
+    environment:
+      SOCFORGE_DB_URL: postgresql://socforge:socforge@postgres:5432/socforge
+      SOCFORGE_TENANT_ID: org_aa
+      SOCFORGE_LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: core/api/Dockerfile
+    container_name: socforge-worker
+    command: ["sh", "-c", "echo 'worker placeholder — idle'; sleep infinity"]
+    environment:
+      SOCFORGE_DB_URL: postgresql://socforge:socforge@postgres:5432/socforge
+      SOCFORGE_TENANT_ID: org_aa
+    depends_on:
+      postgres:
+        condition: service_healthy
+      core:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

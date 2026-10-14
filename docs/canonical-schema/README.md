@@ -58,9 +58,10 @@ Two deliberate omissions in v0.1:
 - **Cases do not reference entities directly.** They reach entities by
   traversing their constituent alerts. A direct case→entity path would
   create a second source of truth for the same relationship.
-- **Actions are not referenced by cases.** An action's `case_id` is the
-  linkage; the case does not carry an `action_ids` field. This keeps the
-  case record stable and avoids a circular reference.
+- **Cases do not reference actions directly.** The linkage is
+  one-directional: `canonical_action.case_id` points at the case. The
+  case carries no `action_ids` field. This avoids a circular reference
+  and a second source of truth.
 
 ---
 
@@ -98,7 +99,8 @@ adding a new source a non-breaking change.
 MITRE ATT&CK is the only enrichment type observed in the v0.1 fixture
 set. It lives inside an `enrichment` object rather than as a first-class
 field, so adding `enrichment.geo`, `enrichment.threat_intel`, etc. later
-does not require a schema revision.
+does not require a schema revision. See
+[Enrichment shape](#enrichment-shape) below.
 
 ### 5. Tenant identity comes from trusted context
 
@@ -107,13 +109,64 @@ adapter from trusted configuration or ingestion context — **never
 inferred from untrusted event content**. When tenant cannot be resolved,
 the alert is quarantined, not guessed.
 
-### 6. The schema describes shape; the adapter describes behavior
+### 6. `required-nullable` and `optional` are not interchangeable
+
+Two distinct patterns appear in the schemas:
+
+- **optional** — the field may be absent entirely.
+  Example: `canonical_alert.target_user`. Fixture 08 has no user, so
+  the field is simply not present.
+
+- **required + nullable** — the field must be present, but its value
+  may be null in a narrow, defined case.
+  Example: `canonical_action.actor_id`. It is always present; it is
+  null only when `actor_type: system` and no specific subsystem applies.
+
+These are not stylistic variants. `optional` means "may not exist";
+`required + nullable` means "must exist, may be empty." Consumers that
+conflate them will mishandle one or the other.
+
+### 7. The schema describes shape; the adapter describes behavior
 
 Required fields, enums, and types are in the schema. Enforcement rules
 that cannot be expressed structurally (e.g. "exactly one `natural_key`
 field is populated," "no transitions after a terminal action state")
 are documented in prose and enforced in the validator layer. See
 [Validator-enforced invariants](#validator-enforced-invariants) below.
+
+---
+
+## Enrichment shape
+
+All four schemas carry an `enrichment` object. Its contents are not
+fixed — enrichment types are added as sources provide them. This section
+is the single canonical definition; the schemas reference it rather than
+repeating it.
+
+### `enrichment.mitre`
+
+MITRE ATT&CK mapping. Present when the source system supplies it.
+
+```yaml
+enrichment:
+  mitre:
+    id: ["T1110"]
+    tactic: ["Credential Access"]
+    technique: ["Brute Force"]
+```
+
+**At alert level**, `mitre` reflects the single detection's mapping.
+
+**At case level**, `mitre` is the UNION of `mitre` across constituent
+alerts.
+
+**At entity and action level**, `mitre` may appear when the entity or
+action is independently associated with an ATT&CK technique (e.g. a
+threat-intel-enriched IP).
+
+Future enrichment types (`geo`, `threat_intel`, `ueba`) follow the same
+pattern: a named object under `enrichment`, extended additively. Adding
+a new enrichment type is NOT a breaking schema change.
 
 ---
 
@@ -243,6 +296,11 @@ The original, unmodified source event.
 **Why it exists:** audit, replay, and schema evolution. Adapters MUST
 NOT prune unknown fields here — future schema versions may need them.
 
+**Why required (unlike case/entity/action):** every alert *derives from*
+a source event. There is always a raw payload. Cases, entities, and
+actions may be constructed natively with no source representation, so
+`raw_payload` is optional there. The asymmetry is intentional.
+
 #### `target_user` — *optional, string, nullable*
 
 The account being acted upon.
@@ -282,11 +340,10 @@ Application protocol.
 
 #### `enrichment` — *optional, object, nullable*
 
-Structured enrichment. Currently the only observed member is
-`enrichment.mitre`.
+Structured enrichment. See [Enrichment shape](#enrichment-shape).
 
-**Why it exists:** keeps MITRE and future enrichment types out of the
-top-level schema, avoiding revisions as enrichment grows.
+At alert level, `enrichment.mitre` reflects **this detection's** ATT&CK
+mapping.
 
 ---
 
@@ -315,7 +372,12 @@ When the case was opened and last modified.
 
 **Why they exist:** `created_at` is not the timestamp of the first alert
 — a case may be opened retroactively when correlation runs against
-stored alerts.
+stored alerts. `updated_at` is meaningful because cases are mutable
+investigation records.
+
+**Contrast:** entities do not carry a separate `updated_at` — their
+`last_seen` is the update signal. Actions are append-only, so nothing is
+ever updated.
 
 #### `status` — *required, enum*
 
@@ -427,9 +489,17 @@ history.
 Standard case-management fields. `closed_at` is null while the case is
 open.
 
-#### `enrichment`, `raw_payload` — *optional*
+#### `enrichment` — *optional, object, nullable*
 
-As in the alert schema.
+See [Enrichment shape](#enrichment-shape). At case level,
+`enrichment.mitre` is the **union** of `mitre` across constituent
+alerts.
+
+#### `raw_payload` — *optional, object, nullable*
+
+Optional passthrough of the source case-management system's native
+representation. Cases constructed natively by the correlation engine
+leave this null.
 
 ---
 
@@ -503,7 +573,8 @@ natural_key:
 Earliest and most recent observation in any alert.
 
 **Why they exist:** entity timelines. `first_seen` is set once;
-`last_seen` updates on every reference.
+`last_seen` updates on every reference. No separate `updated_at` is
+needed — `last_seen` **is** the update signal.
 
 #### `attributes` — *optional, object, nullable*
 
@@ -544,9 +615,17 @@ Entity IDs that were merged into this one.
 references a merged-away entity ID, consumers resolve it via this
 field.
 
-#### `enrichment`, `raw_payload` — *optional*
+#### `enrichment` — *optional, object, nullable*
 
-As in the alert schema.
+See [Enrichment shape](#enrichment-shape). For entities, enrichment
+typically comes from inventory or threat-intel sources rather than from
+the alert itself.
+
+#### `raw_payload` — *optional, object, nullable*
+
+Optional passthrough of a source system's native representation, if the
+entity was imported from an external inventory rather than constructed
+from alert evidence.
 
 ---
 
@@ -626,20 +705,24 @@ not collapse.
 
 Category of response.
 
-**Enum:** `triage`, `containment`, `investigation`, `lifecycle`,
-`automation`
+**Enum:** `triage`, `containment`, `investigation`, `lifecycle`
 
 **Examples by type:**
 - triage → assign analyst, change priority, escalate
 - containment → isolate host, block IP, disable account
 - investigation → request enrichment, trigger analysis
 - lifecycle → close, reopen, mark false positive
-- automation → the action *is* the automation (e.g. schedule a re-scan)
 
-**Note:** `automation` here means the action **is** an automation
-operation. An automated *containment* action is still
-`action_type: containment` — use `actor_type: automation` to record
-that it was automated.
+**Note:** `automation` is NOT an `action_type`. It is recorded via
+`actor_type`. An automated containment action is:
+
+```yaml
+action_type: containment
+actor_type: automation
+```
+
+This keeps "what was done" (`action_type`) orthogonal to "who or what
+did it" (`actor_type`).
 
 #### `actor_type` — *required, enum*
 
@@ -652,7 +735,8 @@ Who or what performed this transition.
 Identifier of the actor.
 
 **Nullable only** when `actor_type: system` and no specific subsystem
-applies.
+applies. This is the canonical example of **required-nullable** — see
+[cross-cutting principle 6](#6-required-nullable-and-optional-are-not-interchangeable).
 
 #### `case_id` — *optional, string, nullable*
 
@@ -708,9 +792,14 @@ execution_details:
   external_ref: "edr-job-88217"
 ```
 
-#### `enrichment`, `raw_payload` — *optional*
+#### `enrichment` — *optional, object, nullable*
 
-As in the alert schema.
+See [Enrichment shape](#enrichment-shape).
+
+#### `raw_payload` — *optional, object, nullable*
+
+Optional passthrough of a source system's native representation, if the
+action was imported from an external case-management or SOAR system.
 
 ---
 

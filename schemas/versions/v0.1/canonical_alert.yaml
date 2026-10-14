@@ -137,6 +137,10 @@ required:
     type: object
     description: >
       The original, unmodified source event as received by the adapter.
+      REQUIRED for alerts — every alert derives from a source event.
+      Contrast with case/entity/action, where records may be constructed
+      natively and raw_payload is therefore optional.
+
       Opaque to downstream consumers; preserved for audit, replay, and
       schema evolution. Adapters MUST NOT prune unknown fields here.
     evidence: "The full Wazuh envelope is preserved in this field."
@@ -154,8 +158,13 @@ optional:
     nullable: true
     description: >
       The account being acted upon or targeted. Wazuh source: `data.dstuser`.
-      Nullable because some failure events do not identify a user
-      (fixture 08). Consumers MUST NOT assume presence.
+      Optional (may be absent) because some failure events do not
+      identify a user (fixture 08). Consumers MUST NOT assume presence.
+
+      Note on required-nullable vs optional: this field is OPTIONAL —
+      it may be absent entirely. Contrast canonical_action.actor_id,
+      which is required-nullable (field must exist; value may be null
+      in a defined case). See docs/canonical-schema/README.md.
     evidence: >
       Present in 01-07, 09, 10. ABSENT in 08 (ssh-failure-no-user).
       This absence is why target_user is optional, not required.
@@ -196,25 +205,18 @@ optional:
     type: object
     nullable: true
     description: >
-      Structured enrichment attached by the source system or downstream.
-      In v0.1 the only observed member is `mitre`. Kept as an open object
-      so future enrichment types don't force schema revisions.
-    properties:
-      mitre:
-        type: object
-        nullable: true
-        description: >
-          MITRE ATT&CK mapping. Wazuh source: `rule.mitre`.
-        properties:
-          id:
-            type: array
-            items: { type: string }
-          tactic:
-            type: array
-            items: { type: string }
-          technique:
-            type: array
-            items: { type: string }
+      Structured enrichment. Open object — see
+      docs/canonical-schema/README.md#enrichment-shape for the
+      canonical shape.
+
+      In v0.1 the only observed member is `mitre`, reflecting THIS
+      detection's ATT&CK mapping:
+
+        enrichment:
+          mitre:
+            id: ["T1110"]
+            tactic: ["Credential Access"]
+            technique: ["Brute Force"]
     evidence: >
       `rule.mitre` present ONLY in fixture 10. This is the sole enrichment
       case in the fixture set, hence optional.
@@ -244,3 +246,10 @@ optional:
 #     Explicitly rejected. `raw_ref.rule_id` preserves the native ID for
 #     traceability, but `event_type` is the canonical classification.
 #     Downstream consumers MUST NOT branch on rule_id.
+#
+# - required-nullable vs optional:
+#     These are distinct patterns. This schema uses OPTIONAL for
+#     target_user, actor_user, source_port, protocol, enrichment —
+#     "field may be absent entirely." Required-nullable is used
+#     elsewhere (e.g. canonical_action.actor_id) for "field must
+#     exist, may be null in a defined case." See README.

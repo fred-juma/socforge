@@ -55,7 +55,11 @@ required:
   updated_at:
     type: string
     format: date-time
-    description: Last modification time (new alert attached, status change, etc.).
+    description: >
+      Last modification time (new alert attached, status change, etc.).
+      Cases are mutable investigation records, so updated_at is
+      meaningful. Contrast entities (where last_seen IS the update
+      signal) and actions (append-only, so nothing is ever updated).
 
   status:
     type: string
@@ -251,15 +255,17 @@ optional:
     nullable: true
     description: >
       Case-level enrichment, distinct from alert-level enrichment.
-      Example: aggregated threat-intel verdict across all source IPs
-      in the case.
-    properties:
-      mitre:
-        type: object
-        nullable: true
-        description: >
-          Union of MITRE techniques across constituent alerts, if any
-          carried enrichment.mitre.
+      Open object — see docs/canonical-schema/README.md#enrichment-shape
+      for the canonical shape.
+
+      In v0.1 the only observed member is `mitre`, which at case level
+      is the UNION of MITRE techniques across constituent alerts:
+
+        enrichment:
+          mitre:
+            id: ["T1110"]
+            tactic: ["Credential Access"]
+            technique: ["Brute Force"]
 
   raw_payload:
     type: object
@@ -267,7 +273,9 @@ optional:
     description: >
       Optional passthrough of the source case-management system's native
       representation, if the case was imported rather than constructed.
-      Cases created natively by the correlation engine may leave this null.
+      Cases created natively by the correlation engine may leave this
+      null. Contrast canonical_alert.raw_payload, which is required
+      because every alert derives from a source event.
 
 # ---------------------------------------------------------------------------
 # Explicitly NOT modeled in v0.1
@@ -298,3 +306,15 @@ optional:
 #     v0.2 when the correlation engine is modeled. For now, the
 #     fact that grouping_origin=correlation_policy plus grouping_keys
 #     is sufficient to reconstruct WHY the case exists.
+#
+# - Entity references (entity_ids field):
+#     Cases reach entities indirectly, via their constituent alerts.
+#     A case carries no direct entity_ids field. Rationale: a second
+#     reference path creates a second source of truth; the join through
+#     alerts is cheap. A derived case-to-entity index may be added in
+#     v0.2 as a materialized artifact — not a schema change.
+#
+# - Action references (action_ids field):
+#     A case does not carry an action_ids field. The linkage is
+#     one-directional: canonical_action.case_id points at the case.
+#     This avoids a circular reference and a second source of truth.

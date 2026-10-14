@@ -110,6 +110,7 @@ required:
       Invariant: for non-unknown entity types, exactly one natural_key
       field is populated. Zero or more than one indicates an adapter
       bug. For entity_type=unknown, natural_key should be {}.
+      Enforced in the validator layer — see README.
     properties:
       user_name:
         type: string
@@ -170,6 +171,11 @@ required:
     description: >
       Most recent time this entity was observed in any alert.
       Updated on every reference.
+
+      Note: entities do not carry a separate `updated_at` field.
+      `last_seen` IS the update signal. Contrast canonical_case,
+      which is a mutable investigation record and carries both
+      created_at and updated_at.
 
 # ---------------------------------------------------------------------------
 # Optional fields
@@ -267,9 +273,12 @@ optional:
     nullable: true
     description: >
       Structured enrichment about the entity from external sources
-      (threat intel, asset inventory, HR system). Open object for the
-      same reason as in canonical_alert and canonical_case — avoids
-      schema churn as enrichment types grow.
+      (threat intel, asset inventory, HR system). Open object — see
+      docs/canonical-schema/README.md#enrichment-shape for the
+      canonical shape and the MITRE example.
+
+      For entities, enrichment typically comes from inventory or
+      threat-intel sources rather than from the alert itself.
 
   raw_payload:
     type: object
@@ -277,7 +286,8 @@ optional:
     description: >
       Optional passthrough of a source system's native representation,
       if the entity was imported from an external inventory rather than
-      constructed from alert evidence.
+      constructed from alert evidence. Contrast canonical_alert.raw_payload,
+      which is required because every alert derives from a source event.
 
 # ---------------------------------------------------------------------------
 # Explicitly NOT modeled in v0.1

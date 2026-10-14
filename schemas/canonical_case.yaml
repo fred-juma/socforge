@@ -1,0 +1,300 @@
+# schemas/canonical_case.yaml
+#
+# Canonical Case — v0.1
+#
+# Represents an investigation: a grouping of one or more canonical alerts
+# that a correlation policy or analyst has decided belong together.
+#
+# Design principles (from Day 3 decisions):
+#   1. A case is a grouping of alerts, not a kind of alert.
+#   2. case_type describes the INVESTIGATION, not the event. Distinct
+#      from canonical_alert.event_type on purpose.
+#   3. Classification is DERIVED from evidence + correlation policy,
+#      and is analyst-overridable.
+#   4. Case priority is SEPARATE from alert severity. Severity answers
+#      "how bad is this event"; priority answers "how urgent is this
+#      investigation."
+#   5. Native rule IDs never appear as case classification — they live
+#      on the constituent alerts in raw_ref.rule_id.
+#   6. null and unknown are DISTINCT states. So are {} and "absent."
+#      The schema preserves these distinctions because collapsing them
+#      destroys operational signal.
+
+version: "0.1"
+schema_name: canonical_case
+
+# ---------------------------------------------------------------------------
+# Required fields
+# ---------------------------------------------------------------------------
+
+required:
+
+  id:
+    type: string
+    description: >
+      Stable, globally unique identifier for this case.
+      Assigned by the case-management layer, not by any source adapter.
+    format: opaque
+
+  tenant_id:
+    type: string
+    description: >
+      Tenant that owns this case. MUST match the tenant_id of every
+      constituent alert. Cross-tenant cases are rejected at construction.
+    resolution: trusted_context_only
+    on_unresolved: quarantine
+
+  created_at:
+    type: string
+    format: date-time
+    description: >
+      When the case was opened. Not the timestamp of the first alert —
+      a case may be opened retroactively when correlation runs against
+      stored alerts.
+
+  updated_at:
+    type: string
+    format: date-time
+    description: Last modification time (new alert attached, status change, etc.).
+
+  status:
+    type: string
+    enum:
+      - open
+      - triaged
+      - investigating
+      - contained
+      - closed
+      - false_positive
+    description: >
+      Lifecycle state of the investigation. Distinct from classification.
+
+  case_type:
+    type: string
+    nullable: true
+    enum:
+      - brute_force
+      - credential_access
+      - lateral_movement
+      - suspicious_authentication
+      - unknown
+    description: >
+      Normalized classification of the INVESTIGATION. Named case_type
+      (not event_type) to keep it clearly distinct from
+      canonical_alert.event_type.
+
+      Three-state semantics — consumers and adapters MUST respect these
+      distinctions:
+
+        null       -> classification has NOT YET been performed, or is
+                      pending analyst review. Expected on newly-created
+                      cases. Measurable as classification backlog.
+
+        unknown    -> classification WAS attempted, but available
+                      evidence does not support a more specific category.
+                      Emitted deliberately by policy or analyst. NOT a
+                      synonym for null.
+
+        <category> -> evidence and correlation policy support the
+                      classification.
+
+      Adapters MUST NOT emit `unknown` as a substitute for null.
+      Adapters MUST NOT leave case_type null after classification has run.
+    classification:
+      derived_from:
+        - constituent alert event_types
+        - constituent alert severities
+        - correlation policy that created the case
+      overridable_by: analyst
+      audit_required: true
+    evidence: >
+      Fixtures 04, 06, 10 (rule 5712, brute_force_detected) are the
+      canonical inputs to a case_type: brute_force case. Fixture 09
+      (no correlation) is the negative case — no case should be created
+      by srcip-only grouping.
+
+  severity:
+    type: string
+    enum: [informational, low, medium, high, critical]
+    description: >
+      Aggregate severity of the case, derived from constituent alerts
+      (e.g. max of alert severities, or a weighted function). This is
+      NOT the same concept as `priority` below.
+
+  priority:
+    type: string
+    enum: [p1, p2, p3, p4]
+    description: >
+      Investigation urgency. Separate from severity on purpose:
+      a high-severity event on a low-value asset may be p3, while a
+      medium-severity event on a domain controller may be p1.
+      Priority is typically assigned by triage policy or analyst,
+      not derived from severity alone.
+
+  alert_ids:
+    type: array
+    items: { type: string }
+    min_items: 1
+    description: >
+      The canonical alert IDs that constitute this case. A case with
+      zero alerts is malformed. Ordering is not semantically meaningful;
+      consumers should sort by alert timestamp if needed.
+
+  grouping_keys:
+    type: object
+    required: true
+    description: >
+      Key(s) the correlation policy matched on to group these alerts
+      into a case. Required, but may be an empty object when no machine
+      grouping applies.
+
+      An empty object is a SIGNAL, not an absence. It means "this case
+      was not machine-grouped by a correlation key." Interpret it
+      alongside grouping_origin:
+        - correlation_policy + {} -> BUG (policy cases must have keys)
+        - manual + {}             -> expected (human-created case)
+        - import + {}             -> expected (no rationale supplied)
+    properties:
+      source_ip:
+        type: string
+        required: false
+      target_user:
+        type: string
+        required: false
+      target_system:
+        type: string
+        required: false
+      time_window_seconds:
+        type: integer
+        required: false
+    evidence: >
+      Fixtures 04, 06, 10 group by (source_ip, target_user) under stock
+      Wazuh 5712. Fixture 09 is the counter-example: same target_user,
+      DIFFERENT source_ips — grouping by source_ip alone misses it,
+      which is why target_user must be a first-class grouping key.
+
+  grouping_origin:
+    type: string
+    required: true
+    enum:
+      - correlation_policy
+      - manual
+      - import
+    description: >
+      How this case came to exist. Required so that an empty
+      grouping_keys object is unambiguous — {} means something different
+      for a manual case than for a correlation_policy case.
+
+      Invariant (enforced by consumers/validators):
+        grouping_origin=correlation_policy MUST have non-empty
+        grouping_keys. A violation indicates a correlation-engine bug.
+      Invariant:
+        grouping_origin=manual MAY have empty grouping_keys.
+      Invariant:
+        grouping_origin=import MAY have empty grouping_keys if the
+        source system supplied no rationale.
+
+# ---------------------------------------------------------------------------
+# Optional fields
+# ---------------------------------------------------------------------------
+# Absent in at least one legitimate case shape. Consumers MUST handle
+# null/absent.
+# ---------------------------------------------------------------------------
+
+optional:
+
+  classification_override:
+    type: object
+    nullable: true
+    description: >
+      Records an analyst override of the derived case_type, severity,
+      or priority. Kept separate from the derived values so both are
+      preserved for audit and future model retraining.
+    properties:
+      case_type:
+        type: string
+        nullable: true
+      severity:
+        type: string
+        nullable: true
+      priority:
+        type: string
+        nullable: true
+      analyst_id:
+        type: string
+      overridden_at:
+        type: string
+        format: date-time
+      rationale:
+        type: string
+
+  assignee:
+    type: string
+    nullable: true
+    description: Analyst or team currently owning the investigation.
+
+  closed_at:
+    type: string
+    format: date-time
+    nullable: true
+    description: When the case reached a terminal status. Null while open.
+
+  close_reason:
+    type: string
+    nullable: true
+    description: >
+      Why the case was closed. Relevant when status is closed or
+      false_positive.
+
+  enrichment:
+    type: object
+    nullable: true
+    description: >
+      Case-level enrichment, distinct from alert-level enrichment.
+      Example: aggregated threat-intel verdict across all source IPs
+      in the case.
+    properties:
+      mitre:
+        type: object
+        nullable: true
+        description: >
+          Union of MITRE techniques across constituent alerts, if any
+          carried enrichment.mitre.
+
+  raw_payload:
+    type: object
+    nullable: true
+    description: >
+      Optional passthrough of the source case-management system's native
+      representation, if the case was imported rather than constructed.
+      Cases created natively by the correlation engine may leave this null.
+
+# ---------------------------------------------------------------------------
+# Explicitly NOT modeled in v0.1
+# ---------------------------------------------------------------------------
+#
+# - event_type:
+#     Deliberately replaced by case_type. "event_type" at case level would
+#     blur the alert/case distinction. See Day 3 decision record.
+#
+# - alert severity as case severity:
+#     Case severity is DERIVED from constituent alerts, not copied from
+#     any single one. The derivation function is policy, not schema.
+#
+# - native rule IDs as case classification:
+#     Rejected, same as at alert level. Native IDs live on alerts in
+#     raw_ref.rule_id. Case classification is semantic.
+#
+# - timeline / narrative:
+#     Belongs in a separate case-timeline artifact, not in the case
+#     record itself. Defer to v0.2.
+#
+# - MITRE as a first-class case field:
+#     Rides inside `enrichment.mitre` for the same reasons it does at
+#     alert level — avoids schema churn as enrichment types grow.
+#
+# - grouped_by / correlation_rule_id:
+#     The specific rule or policy that created the case. Deferred to
+#     v0.2 when the correlation engine is modeled. For now, the
+#     fact that grouping_origin=correlation_policy plus grouping_keys
+#     is sufficient to reconstruct WHY the case exists.

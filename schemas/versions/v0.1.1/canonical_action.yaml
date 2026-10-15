@@ -1,0 +1,317 @@
+# schemas/canonical_action.yaml
+#
+# Canonical Action — v0.1
+#
+# Represents a response or case-management action taken (or intended) by
+# an analyst, SOCForge, or an automated workflow. Actions answer the
+# question "what did we do about it?" — distinct from alerts (what was
+# detected), cases (what investigation groups the alerts), and entities
+# (who/what was involved).
+#
+# Model: EVENT LOG, not stateful object.
+#   Each record is a STATE TRANSITION of a logical action, not the action
+#   itself. The logical action is identified by action_id; its transitions
+#   share that action_id and are ordered by occurred_at.
+#
+#   Rationale:
+#     - Matches the event-based philosophy of canonical_alert.
+#     - Preserves full audit history (essential for disruptive actions).
+#     - Append-only: no concurrent-update corruption.
+#     - "Current state" is a fold over transitions, materializable in v0.2.
+#
+# Design principles (from Day 3 decisions):
+#   1. Recording an action is NOT the same as executing it. Proposed,
+#      approved, rejected, executed, failed, and cancelled are distinct.
+#   2. The schema records THAT an action was executed, not the mechanism.
+#      Execution belongs to an adapter/execution layer.
+#   3. An action MAY be case-scoped or standalone. If standalone,
+#      rationale is required — see invariant.
+#   4. Detected behavior is NOT modeled here. It lives in
+#      canonical_alert.event_type.
+
+version: "0.1"
+schema_name: canonical_action
+
+# ---------------------------------------------------------------------------
+# Required fields
+# ---------------------------------------------------------------------------
+
+required:
+
+  id:
+    type: string
+    description: >
+      Unique identifier for THIS STATE TRANSITION, not the logical action.
+      Two transitions of the same logical action share an action_id but
+      have different ids.
+    format: opaque
+
+  action_id:
+    type: string
+    description: >
+      Identifier for the LOGICAL ACTION. All transitions of the same
+      action share this value. To reconstruct the action's history,
+      query all records with the same action_id ordered by occurred_at.
+    format: opaque
+
+  tenant_id:
+    type: string
+    description: >
+      Tenant that owns this action. MUST match the tenant_id of the
+      associated case (if any) and of every target entity.
+    resolution: trusted_context_only
+    on_unresolved: quarantine
+
+  occurred_at:
+    type: string
+    format: date-time
+    description: >
+      When THIS transition happened. NOT the time the action was
+      first proposed — that is the occurred_at of the first transition.
+      Ordering of transitions is by this field.
+
+  state:
+    type: string
+    enum:
+      - proposed
+      - approved
+      - rejected
+      - executed
+      - failed
+      - cancelled
+    description: >
+      The state this transition moves the action into.
+
+      Lifecycle semantics — consumers MUST respect these distinctions:
+
+        proposed  -> someone or something requested the action.
+                     Terminal for rejection paths; non-terminal otherwise.
+        approved  -> authorized; not yet executed.
+                     Only valid after proposed.
+        rejected  -> denied; will not execute. TERMINAL.
+        executed  -> successfully carried out. TERMINAL.
+        failed    -> attempted, did not succeed. TERMINAL.
+        cancelled -> withdrawn before execution. TERMINAL.
+
+      rejected vs cancelled: rejected means "never authorized";
+      cancelled means "authorized but withdrawn." Different audit
+      meanings — do NOT collapse.
+
+      Invariants (enforced by consumers/validators):
+        - The first transition of an action MUST be `proposed`.
+        - `approved` MUST follow a `proposed` transition.
+        - Terminal states (`rejected`, `executed`, `failed`, `cancelled`)
+          MUST NOT be followed by further transitions.
+        - A transition sequence MUST NOT skip from `proposed` directly
+          to `executed` for action_types classified as disruptive
+          (containment). Approval is required.
+
+  action_type:
+    type: string
+    enum:
+      - triage
+      - containment
+      - investigation
+      - lifecycle
+    description: >
+      Category of response. Determines which state transitions are
+      valid and which approval requirements apply.
+
+        triage        -> assign analyst, change priority, escalate
+        containment   -> isolate host, block IP, disable account
+        investigation -> request enrichment, trigger analysis workflow
+        lifecycle     -> close, reopen, mark false positive
+
+      NOTE: automation is NOT an action_type. It is recorded via
+      actor_type. An automated containment action is:
+          action_type: containment
+          actor_type: automation
+      This keeps "what was done" (action_type) orthogonal to
+      "who or what did it" (actor_type).
+
+  actor_type:
+    type: string
+    enum:
+      - analyst
+      - automation
+      - system
+    description: >
+      Who or what performed THIS transition.
+        analyst    -> a human user
+        automation -> a workflow, playbook, or SOAR
+        system     -> SOCForge internal (retention, auto-close on
+                      timeout, etc.)
+
+  actor_id:
+    type: string
+    nullable: true
+    description: >
+      Identifier of the actor. For analyst: a user ID. For automation:
+      a workflow/playbook ID. For system: a subsystem name.
+      Nullable only when actor_type=system and no specific subsystem
+      applies.
+
+      Note on required-nullable vs optional: this field is
+      REQUIRED-NULLABLE — it must be present in the record, but its
+      value may be null in the defined case above. Contrast
+      canonical_alert.target_user, which is OPTIONAL — it may be
+      absent entirely. These patterns are not interchangeable.
+      See docs/canonical-schema/README.md.
+
+# ---------------------------------------------------------------------------
+# Optional fields
+# ---------------------------------------------------------------------------
+# Absent in at least one legitimate action shape. Consumers MUST handle
+# null/absent.
+# ---------------------------------------------------------------------------
+
+optional:
+
+  case_id:
+    type: string
+    nullable: true
+    description: >
+      The case this action responds to. Nullable — some actions are
+      not case-scoped (e.g. threat-intel-driven IP block, proactive
+      host isolation).
+
+      INVARIANT: if case_id is null, rationale is REQUIRED.
+      A standalone action must justify itself.
+    invariant: rationale_required_when_absent
+
+  target_entity_ids:
+    type: array
+    nullable: true
+    items: { type: string }
+    description: >
+      Entity IDs this action operates on. References into
+      canonical_entity.yaml. A containment action against a host has
+      one target; a bulk block against a list of IPs has many.
+
+      Nullable because some actions have no entity target
+      (e.g. lifecycle action "close case", triage action "assign
+      analyst"). Those operate on the case, not on an entity.
+
+  rationale:
+    type: string
+    nullable: true
+    description: >
+      Why this transition was taken. REQUIRED when case_id is null
+      (standalone actions must justify themselves). Optional otherwise,
+      but recommended for disruptive actions.
+
+  approval_ref:
+    type: string
+    nullable: true
+    description: >
+      Reference to the approval record authorizing this action, when
+      a separate approval system exists. Populated on `approved` and
+      subsequent transitions. Distinct from `actor_id` — the approver
+      may differ from the actor.
+
+  approver_id:
+    type: string
+    nullable: true
+    description: >
+      Identifier of the approver. Populated on `approved` transitions.
+      Null for actions that do not require approval (e.g. triage).
+
+  automation_id:
+    type: string
+    nullable: true
+    description: >
+      Identifier of the automation workflow, when actor_type=automation.
+      Distinct from actor_id so that a workflow acting on behalf of an
+      analyst can record both.
+
+  execution_details:
+    type: object
+    nullable: true
+    description: >
+      Details about what the execution DID, when the action reached a
+      terminal execution state (`executed` or `failed`). The schema
+      records THAT execution happened; this field records the outcome
+      summary, not the mechanism.
+
+      The actual execution mechanism belongs to an execution/adapter
+      layer, not to this schema.
+    properties:
+      success:
+        type: boolean
+        nullable: true
+      error_message:
+        type: string
+        nullable: true
+        description: Populated when the transition is `failed`.
+      duration_ms:
+        type: integer
+        nullable: true
+      external_ref:
+        type: string
+        nullable: true
+        description: >
+          Reference to the execution record in the system that performed
+          it (e.g. EDR job ID, firewall rule ID). Preserved for
+          traceability.
+
+  enrichment:
+    type: object
+    nullable: true
+    description: >
+      Structured enrichment. Open object — see
+      docs/canonical-schema/README.md#enrichment-shape for the
+      canonical shape and the MITRE example.
+
+      For actions, enrichment may describe the source of the decision
+      (e.g. threat-intel verdict that motivated a block) rather than
+      the action's own ATT&CK mapping.
+
+  raw_payload:
+    type: object
+    nullable: true
+    description: >
+      Optional passthrough of a source system's native representation,
+      if the action was imported from an external case-management or
+      SOAR system. Actions recorded natively by SOCForge may leave this
+      null. Contrast canonical_alert.raw_payload, which is required
+      because every alert derives from a source event.
+
+# ---------------------------------------------------------------------------
+# Explicitly NOT modeled in v0.1
+# ---------------------------------------------------------------------------
+#
+# - Execution mechanism:
+#     The schema records THAT an action was executed, not HOW. The
+#     mechanism (API call, SSH command, EDR API, firewall update)
+#     belongs to an execution/adapter layer, not the canonical schema.
+#     execution_details.external_ref is the seam between the two.
+#
+# - Detected behavior:
+#     What the attacker did is canonical_alert.event_type, not an
+#     action. Deliberately NOT duplicated here.
+#
+# - Current state as a stored field:
+#     Because this is an event log, "current state" is a fold over
+#     transitions. A materialized action_state view may be added in
+#     v0.2 if query performance justifies it — it would be a DERIVED
+#     ARTIFACT, not a schema change.
+#
+# - Approval workflow / RBAC:
+#     Who is authorized to approve which action_type is access-control
+#     policy, not schema. approval_ref and approver_id record the FACT
+#     of approval; they do not define who may approve.
+#
+# - Scheduled / future actions:
+#     An action with a future execution time is a v0.2 concern.
+#     v0.1 records transitions that HAVE occurred.
+#
+# - Action dependencies / chaining:
+#     "Block IP, then isolate host, then notify" is a workflow concept.
+#     Modeled as separate actions sharing a correlation mechanism
+#     (e.g. automation_id) rather than as a parent/child relationship
+#     in this schema.
+#
+# - automation as an action_type:
+#     Rejected. Automation is orthogonal to what was done — it is
+#     recorded via actor_type. An automated containment action is
+#     action_type: containment, actor_type: automation.

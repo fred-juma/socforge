@@ -857,3 +857,4 @@ v0.1.1; breaking changes require v0.2.
 | Version | Date | Notes |
 |---|---|---|
 | v0.1 | 2026-10-14 | Initial canonical schemas. Four schemas. Synthesized from 10 Wazuh SSH fixtures. |
+| v0.1.1 | 2026-10-15 | Corrects the v0.1 alert parse error and completes the action schema. Also removes `automation` from `action_type`. |

@@ -1,0 +1,337 @@
+# schemas/canonical_entity.yaml
+#
+# Canonical Entity — v0.1
+#
+# Represents a thing that alerts and cases can reference: a user account,
+# a host, an IP address, a domain, a service, etc. Entities are the JOIN KEY
+# that lets SOCForge answer questions like "has this user been targeted
+# before?" or "what else has this host been involved in?"
+#
+# Design principles (from Day 3 decisions):
+#   1. An entity is identified by (tenant_id, entity_type, natural_key),
+#      not by a surrogate ID alone. The natural key is what makes dedup
+#      possible.
+#   2. IDENTITY is tenant-scoped. MATCHABILITY is global for observables
+#      (ip, domain) and tenant-scoped for everything else. These are
+#      different concepts and the schema keeps them separate.
+#   3. Alerts reference entities. Cases reference alerts. Cases do NOT
+#      reference entities directly in v0.1 — see "Explicitly NOT modeled."
+#   4. An entity's identity is stable; its ATTRIBUTES are volatile.
+#      Attributes are enriched, not identity.
+#   5. null vs unknown discipline carries over from case_type.
+
+version: "0.1"
+schema_name: canonical_entity
+
+# ---------------------------------------------------------------------------
+# Required fields
+# ---------------------------------------------------------------------------
+
+required:
+
+  id:
+    type: string
+    description: >
+      Stable, globally unique identifier for this entity record.
+      This is a SURROGATE key — it identifies the record, not the thing.
+      The thing itself is identified by (tenant_id, entity_type,
+      natural_key).
+    format: opaque
+
+  tenant_id:
+    type: string
+    description: >
+      Tenant that owns this entity record.
+
+      Scope rules — identity vs. matchability:
+
+        - user / host / service / application entities are TENANT-SCOPED
+          in full. The same username in two tenants is two different
+          entities. No cross-tenant matching of identity.
+
+        - ip / domain entities are TENANT-SCOPED for ownership and
+          attributes, but their natural_key is a GLOBALLY MATCHABLE
+          OBSERVABLE. The platform may match these across tenants for
+          correlation and enrichment, subject to cross-tenant access
+          controls. Matching does NOT merge entity records — it only
+          surfaces relationships.
+
+      Consequence: the same real-world thing may have multiple entity
+      records, one per tenant. Dedup across tenants is deliberately NOT
+      performed in v0.1 — it requires a cross-tenant identity policy
+      that does not yet exist.
+    resolution: trusted_context_only
+    on_unresolved: quarantine
+
+  entity_type:
+    type: string
+    enum:
+      - user
+      - host
+      - ip
+      - domain
+      - service
+      - application
+      - unknown
+    description: >
+      What kind of thing this entity represents. Determines which
+      natural_key fields are meaningful.
+
+        user        -> natural_key.user_name
+        host        -> natural_key.host_name
+        ip          -> natural_key.ip_address
+        domain      -> natural_key.domain_name
+        service     -> natural_key.service_name (+ host scope)
+        application -> natural_key.app_name
+        unknown     -> no natural_key expected; identity deliberately
+                       unresolved. NOT a synonym for absent — same
+                       discipline as case_type.
+
+  natural_key:
+    type: object
+    required: true
+    description: >
+      The minimal set of fields that uniquely identify this entity
+      WITHIN its tenant. Two entity records with the same tenant_id,
+      entity_type, and natural_key refer to the same thing and MUST
+      be deduplicated.
+
+      Identity vs. matchability:
+        - IDENTITY is tenant-scoped. Two records are the same entity
+          iff tenant_id + entity_type + natural_key match.
+        - MATCHABILITY is global for ip_address and domain_name. These
+          are OBSERVABLES — the platform may match them across tenants
+          for correlation and enrichment, subject to cross-tenant
+          access controls. Matching does NOT merge entity records;
+          it only surfaces relationships.
+
+      Field relevance depends on entity_type — see each field.
+
+      Invariant: for non-unknown entity types, exactly one natural_key
+      field is populated. Zero or more than one indicates an adapter
+      bug. For entity_type=unknown, natural_key should be {}.
+      Enforced in the validator layer — see README.
+    properties:
+      user_name:
+        type: string
+        required: false
+        scope: tenant
+        description: >
+          Username. Relevant for entity_type=user.
+          Source: canonical_alert.target_user or .actor_user.
+      host_name:
+        type: string
+        required: false
+        scope: tenant
+        description: >
+          Hostname. Relevant for entity_type=host.
+          Source: canonical_alert.target_system.
+      ip_address:
+        type: string
+        format: ipv4-or-ipv6
+        required: false
+        scope: global_observable
+        description: >
+          IP literal, no port. Relevant for entity_type=ip.
+          Globally matchable observable. Cross-tenant matching is
+          permitted; cross-tenant DATA ACCESS is governed by
+          access-control policy, not by this schema.
+          Source: canonical_alert.source_ip.
+      domain_name:
+        type: string
+        required: false
+        scope: global_observable
+        description: >
+          Fully-qualified domain name. Relevant for entity_type=domain.
+          Globally matchable observable, same semantics as ip_address.
+      service_name:
+        type: string
+        required: false
+        scope: tenant
+        description: >
+          Service identifier (e.g. "sshd", "nginx"). Relevant for
+          entity_type=service.
+      app_name:
+        type: string
+        required: false
+        scope: tenant
+        description: >
+          Application identifier. Relevant for entity_type=application.
+
+  first_seen:
+    type: string
+    format: date-time
+    description: >
+      Earliest time this entity was observed in any alert.
+      Set on creation, never modified.
+
+  last_seen:
+    type: string
+    format: date-time
+    description: >
+      Most recent time this entity was observed in any alert.
+      Updated on every reference.
+
+      Note: entities do not carry a separate `updated_at` field.
+      `last_seen` IS the update signal. Contrast canonical_case,
+      which is a mutable investigation record and carries both
+      created_at and updated_at.
+
+# ---------------------------------------------------------------------------
+# Optional fields
+# ---------------------------------------------------------------------------
+# Absent in at least one legitimate entity shape. Consumers MUST handle
+# null/absent.
+# ---------------------------------------------------------------------------
+
+optional:
+
+  attributes:
+    type: object
+    nullable: true
+    description: >
+      Volatile, type-dependent attributes of the entity. Distinct from
+      natural_key: natural_key answers "which thing is this?", attributes
+      answer "what do we know about it?"
+
+      Attributes are ENRICHED, not authoritative. A missing attribute
+      means "unknown," not "false." Consumers MUST NOT treat absence
+      as a negative assertion.
+
+      Attributes may be updated without changing entity identity.
+    properties:
+      # --- user attributes ---
+      display_name:
+        type: string
+        nullable: true
+      email:
+        type: string
+        nullable: true
+      department:
+        type: string
+        nullable: true
+      privileged:
+        type: boolean
+        nullable: true
+        description: >
+          Whether the account holds elevated privileges. Nullable —
+          null means "not known," false means "known not privileged."
+
+      # --- host attributes ---
+      os:
+        type: string
+        nullable: true
+      criticality:
+        type: string
+        nullable: true
+        enum: [low, medium, high, critical, null]
+        description: >
+          Business criticality of the asset. Nullable — unknown
+          criticality is a real state, distinct from "low."
+
+      # --- ip attributes ---
+      asn:
+        type: string
+        nullable: true
+      geo_country:
+        type: string
+        nullable: true
+        description: ISO 3166-1 alpha-2 country code, when known.
+
+      # --- domain attributes ---
+      registrar:
+        type: string
+        nullable: true
+      registered_at:
+        type: string
+        format: date-time
+        nullable: true
+
+  aliases:
+    type: array
+    nullable: true
+    items: { type: string }
+    description: >
+      Alternative identifiers that refer to the same entity
+      (e.g. multiple usernames for one person, hostname aliases).
+      Aliases are HINTS for correlation, not identity. Two entities
+      are the same only if tenant_id + entity_type + natural_key
+      match — aliases never override that.
+
+  merged_from:
+    type: array
+    nullable: true
+    items: { type: string }
+    description: >
+      Entity IDs that were merged into this one. Preserved for audit
+      when duplicate entities are consolidated. If an alert references
+      a merged-away entity ID, consumers MUST resolve it to the
+      surviving entity via this field.
+
+  enrichment:
+    type: object
+    nullable: true
+    description: >
+      Structured enrichment about the entity from external sources
+      (threat intel, asset inventory, HR system). Open object — see
+      docs/canonical-schema/README.md#enrichment-shape for the
+      canonical shape and the MITRE example.
+
+      For entities, enrichment typically comes from inventory or
+      threat-intel sources rather than from the alert itself.
+
+  raw_payload:
+    type: object
+    nullable: true
+    description: >
+      Optional passthrough of a source system's native representation,
+      if the entity was imported from an external inventory rather than
+      constructed from alert evidence. Contrast canonical_alert.raw_payload,
+      which is required because every alert derives from a source event.
+
+# ---------------------------------------------------------------------------
+# Explicitly NOT modeled in v0.1
+# ---------------------------------------------------------------------------
+#
+# - Entity references from canonical_case:
+#     Cases reference ALERTS (via alert_ids). Alerts reference entities
+#     (via target_user, source_ip, target_system, actor_user). The
+#     entity graph is therefore reachable from a case by traversal,
+#     but a case carries no direct entity_ids field in v0.1. Rationale:
+#     a second reference path creates a second source of truth, and the
+#     join through alerts is cheap.
+#
+# - Derived case-to-entity index:
+#     Deferred to v0.2 if performance or analyst workflows justify it.
+#     In v0.1 cases reach entities indirectly through constituent alerts.
+#     The index would be a DERIVED ARTIFACT, not a schema change — it
+#     can be added later without revising this file.
+#
+# - Cross-tenant entity dedup:
+#     Deliberately not performed. IP/domain observables are globally
+#     MATCHABLE, but entity records are not merged across tenants.
+#     Cross-tenant matching surfaces relationships; it does not collapse
+#     identity. Promoting it would require a cross-tenant identity policy
+#     that does not yet exist.
+#
+# - Cross-tenant access controls:
+#     The schema marks ip_address and domain_name as scope:
+#     global_observable. It does NOT specify who may read across tenants.
+#     That policy lives in the access-control layer. The schema's job is
+#     to say these fields CAN be matched; the platform's job is to say
+#     WHO can act on the match.
+#
+# - Entity relationships (user OWNS host, service RUNS ON host):
+#     Belongs in a separate graph/relationship artifact, not in the
+#     entity record itself. Defer to v0.2.
+#
+# - Confidence scores on entity resolution:
+#     Aliases are hints, not probabilistic matches. If fuzzy entity
+#     resolution is added later, it belongs in a separate
+#     entity-resolution artifact with its own confidence model.
+#
+# - First-class "unknown" entity records:
+#     entity_type=unknown exists as an enum value to preserve the
+#     null/unknown discipline, but creating unknown entities at scale
+#     is discouraged — it indicates upstream data quality problems
+#     that should be fixed, not modeled.

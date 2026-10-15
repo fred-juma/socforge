@@ -17,7 +17,6 @@ are byte-identical to v0.1.
 ### `canonical_alert.yaml`
 
 - Corrected a YAML parsing error that prevented the file from loading.
-- <add any other alert revisions made since v0.1, if applicable>
 
 ### `canonical_action.yaml`
 

@@ -1,0 +1,17 @@
+{
+  "id": "case-2026-0001",
+  "tenant_id": "org_aa",
+  "created_at": "2026-10-14T09:20:00.000Z",
+  "updated_at": "2026-10-14T09:25:00.000Z",
+  "status": "open",
+  "case_type": "brute_force",
+  "severity": "low",
+  "priority": "p3",
+  "alert_ids": ["1730000122.482910"],
+  "grouping_keys": {
+    "source_ip": "203.0.113.47",
+    "target_user": "deploy",
+    "time_window_seconds": 240
+  },
+  "grouping_origin": "correlation_policy"
+}

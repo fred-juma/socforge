@@ -1,0 +1,10 @@
+{
+  "id": "ent-ip-203-0-113-47",
+  "tenant_id": "org_aa",
+  "entity_type": "ip",
+  "natural_key": {
+    "ip_address": "203.0.113.47"
+  },
+  "first_seen": "2026-10-14T09:15:22.481Z",
+  "last_seen": "2026-10-14T09:15:22.481Z"
+}

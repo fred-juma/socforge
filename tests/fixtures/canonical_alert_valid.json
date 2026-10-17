@@ -1,0 +1,24 @@
+{
+  "id": "1730000122.482910",
+  "tenant_id": "org_aa",
+  "timestamp": "2026-10-14T09:15:22.481Z",
+  "source_adapter": "wazuh",
+  "event_type": "auth_failure",
+  "source_ip": "203.0.113.47",
+  "severity": "low",
+  "target_system": "web-server-01",
+  "raw_ref": {
+    "adapter": "wazuh",
+    "rule_id": "5760",
+    "event_id": "1730000122.482910",
+    "index_hint": "/var/log/auth.log"
+  },
+  "raw_payload": {
+    "rule": { "id": "5760", "level": 5 },
+    "agent": { "name": "web-server-01" },
+    "data": { "srcip": "203.0.113.47", "dstuser": "deploy" }
+  },
+  "target_user": "deploy",
+  "source_port": 51422,
+  "protocol": "ssh2"
+}

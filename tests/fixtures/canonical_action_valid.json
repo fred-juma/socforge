@@ -1,0 +1,12 @@
+{
+  "id": "act-2026-0001-evt-1",
+  "action_id": "act-2026-0001",
+  "tenant_id": "org_aa",
+  "occurred_at": "2026-10-14T09:30:00.000Z",
+  "state": "proposed",
+  "action_type": "triage",
+  "actor_type": "analyst",
+  "actor_id": "analyst@org_aa.com",
+  "case_id": "case-2026-0001",
+  "rationale": "Escalating to tier 2 for review"
+}

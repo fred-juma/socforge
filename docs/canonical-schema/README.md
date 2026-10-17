@@ -200,7 +200,7 @@ without it. An alert with no owner is a data-leak risk.
 **Resolution:** `trusted_context_only` — injected by the adapter, never
 inferred from payload. If unresolved, the alert is quarantined.
 
-**Example:** `"acme-corp"`
+**Example:** `"org_aa"`
 
 #### `timestamp` — *required, ISO 8601 date-time*
 

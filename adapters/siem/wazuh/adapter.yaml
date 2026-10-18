@@ -1,0 +1,28 @@
+# adapters/siem/wazuh/adapter.yaml
+name: wazuh
+version: "0.1.0"
+source_type: siem
+canonical_schema_version: "0.1"
+
+description: "Wazuh SIEM/EDR alert adapter. Translates one Wazuh JSON alert into one SOCForge canonical alert dictionary conforming to schemas/canonical_alert.yaml v0.1. Translation only; no ingestion, transport, buffering, persistence, correlation, case creation, or enrichment."
+
+public_api:
+  function: parse
+  signature: "parse(raw: dict, *, tenant_id: str) -> dict"
+  returns: "Canonical alert dict suitable for core.schema.loader.validate_alert()."
+  raises:
+    - "WazuhParseError: missing required data, malformed mapped value, or unclassifiable event"
+
+configuration:
+  required:
+    tenant_id:
+      type: string
+      description: "Tenant that owns alerts produced by this parser invocation. Passed as a keyword argument to parse(). Never read from the Wazuh event."
+  optional: {}
+
+not_in_scope:
+  - "live ingestion (polling, webhooks, syslog receivers)"
+  - "queues, buffers, or persistence"
+  - "correlation, case creation, enrichment fetches"
+  - "response orchestration"
+  - "schema version negotiation (targets v0.1 only)"

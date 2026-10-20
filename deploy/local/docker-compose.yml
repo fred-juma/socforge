@@ -8,9 +8,13 @@ services:
       POSTGRES_DB: socforge
     ports:
       - "5432:5432"
+    # NOTE: /docker-entrypoint-initdb.d/ scripts run only on a fresh
+    # data volume. Existing volumes require explicit psql apply of
+    # any new migration in deploy/shared/postgres/migrations/.
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../shared/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../shared/postgres/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+      - ../shared/postgres/migrations/001_alert_canonical_columns.sql:/docker-entrypoint-initdb.d/01_alert_canonical_columns.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U socforge -d socforge"]
       interval: 5s

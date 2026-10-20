@@ -35,3 +35,12 @@ Thumbs.db
 *.log
 logs/
 data/
+# Day 6 — ingestion artefacts (do not commit)
+*.db
+*.db-journal
+phase*.txt
+day*.txt
+.env
+.venv/
+__pycache__/
+*.pyc

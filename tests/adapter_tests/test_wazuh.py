@@ -64,6 +64,7 @@ def _minimal_valid_raw() -> dict:
         "timestamp": "2026-10-14T10:00:00.000Z",
         "rule": {"id": "5760", "level": 5, "groups": ["authentication_failed"]},
         "agent": {"id": "001", "name": "host-01"},
+        "manager": {"name": "wazuh-manager"},
         "location": "/var/log/auth.log",
         "data": {"srcip": "203.0.113.47"},
     }
@@ -102,7 +103,8 @@ def test_fixture_parses_to_valid_canonical_alert(
     assert alert.tenant_id == TENANT_ID
     assert alert.source_adapter == "wazuh"
     assert alert.raw_ref.adapter == "wazuh"
-    assert alert.id == raw["id"]
+    #assert alert.id == raw["id"]
+    assert alert.id == f"wazuh:{raw['manager']['name']}:{raw['id']}"
     assert alert.raw_ref.event_id == raw["id"]
 
 

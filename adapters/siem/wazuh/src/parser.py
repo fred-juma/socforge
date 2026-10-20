@@ -11,6 +11,8 @@ Design contract:
   - The parser never invents values for required fields.
   - raw_payload preserves the complete source event as received
     (the test-only `_fixture` block is stripped by the caller, not here).
+  - Canonical id is namespaced as "wazuh:{manager.name}:{native_id}" to
+    guarantee uniqueness across Wazuh managers (Day 6 Decision #5).
 
 See docs/integrations/wazuh.md for the full mapping table.
 """
@@ -19,7 +21,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from core.schema.enums import AlertEventType, AlertSeverity
@@ -75,6 +77,65 @@ def _require(mapping: dict, key: str, where: str) -> Any:
     return mapping[key]
 
 
+def _require_int_not_bool(value: Any, field: str) -> int:
+    """Coerce value to int, rejecting bool (an int subclass) and floats."""
+    if isinstance(value, bool):
+        raise WazuhParseError(f"{field} must be an integer, got bool {value!r}")
+    if isinstance(value, float):
+        raise WazuhParseError(f"{field} must be an integer, got float {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise WazuhParseError(
+            f"{field} must be an integer, got {value!r}"
+        ) from None
+
+
+def _optional_nonempty_str(value: Any, field: str) -> str:
+    """Validate an optional scalar: if present, must be a non-empty string."""
+    if not isinstance(value, str):
+        raise WazuhParseError(
+            f"{field} must be a string, got {type(value).__name__}"
+        )
+    if value == "":
+        raise WazuhParseError(f"{field} must be non-empty when present")
+    return value
+
+
+def _normalize_timestamp(value: Any) -> str:
+    """Parse ISO 8601, require tz-aware, return UTC-normalized string."""
+    if not isinstance(value, str):
+        raise WazuhParseError(
+            f"timestamp must be a string, got {type(value).__name__}"
+        )
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise WazuhParseError(
+            f"timestamp is not valid ISO 8601: {value!r}"
+        ) from None
+    if parsed.tzinfo is None:
+        raise WazuhParseError(
+            f"timestamp must include a timezone offset: {value!r}"
+        )
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _mitre_list(mitre: dict, key: str) -> list[str]:
+    """Return mitre[key] as a validated list[str]."""
+    value = mitre.get(key, [])
+    if not isinstance(value, list):
+        raise WazuhParseError(
+            f"rule.mitre.{key} must be a list, got {type(value).__name__}"
+        )
+    for i, item in enumerate(value):
+        if not isinstance(item, str):
+            raise WazuhParseError(
+                f"rule.mitre.{key}[{i}] must be a string, got {type(item).__name__}"
+            )
+    return list(value)
+
+
 def _classify(rule: dict) -> AlertEventType:
     rule_id = str(rule.get("id", ""))
     if rule_id in _RULE_ID_TO_EVENT_TYPE:
@@ -109,7 +170,7 @@ def parse(raw: dict, *, tenant_id: str) -> dict:
         raise WazuhParseError(f"raw must be a dict, got {type(raw).__name__}")
 
     # --- Required top-level fields ---
-    event_id = _require(raw, "id", "raw")
+    event_id = _optional_nonempty_str(_require(raw, "id", "raw"), "id")
     timestamp_str = _require(raw, "timestamp", "raw")
     rule = _require(raw, "rule", "raw")
     if not isinstance(rule, dict):
@@ -117,21 +178,33 @@ def parse(raw: dict, *, tenant_id: str) -> dict:
 
     rule_id = _require(rule, "id", "raw.rule")
     level_raw = _require(rule, "level", "raw.rule")
-    try:
-        level = int(level_raw)
-    except (TypeError, ValueError):
-        raise WazuhParseError(
-            f"rule.level must be an integer, got {level_raw!r}"
-        ) from None
+    level = _require_int_not_bool(level_raw, "rule.level")
+    if level < 0 or level > 15:
+        raise WazuhParseError(f"rule.level out of range [0,15]: {level}")
 
     # --- agent / target_system ---
     agent = raw.get("agent") or {}
     if not isinstance(agent, dict):
         raise WazuhParseError("agent must be a JSON object")
-    target_system = agent.get("name") or agent.get("id")
-    if not target_system:
+    agent_name = agent.get("name")
+    agent_id = agent.get("id")
+    if agent_name is not None:
+        target_system = _optional_nonempty_str(agent_name, "agent.name")
+    elif agent_id is not None:
+        target_system = _optional_nonempty_str(agent_id, "agent.id")
+    else:
         raise WazuhParseError(
             "Neither agent.name nor agent.id is present — cannot determine target_system"
+        )
+
+    # --- manager (required for namespacing canonical id) ---
+    manager = raw.get("manager") or {}
+    if not isinstance(manager, dict):
+        raise WazuhParseError("manager must be a JSON object")
+    manager_name = manager.get("name")
+    if not manager_name or not isinstance(manager_name, str) or manager_name.strip() == "":
+        raise WazuhParseError(
+            "manager.name is required to namespace the canonical id"
         )
 
     # --- data / source_ip ---
@@ -147,12 +220,7 @@ def parse(raw: dict, *, tenant_id: str) -> dict:
         raise WazuhParseError(f"data.srcip is not a valid IP literal: {srcip!r}") from None
 
     # --- timestamp ---
-    try:
-        datetime.fromisoformat(str(timestamp_str).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        raise WazuhParseError(
-            f"timestamp is not ISO 8601: {timestamp_str!r}"
-        ) from None
+    canonical_timestamp = _normalize_timestamp(timestamp_str)
 
     # --- classification and severity ---
     event_type = _classify(rule)
@@ -165,14 +233,15 @@ def parse(raw: dict, *, tenant_id: str) -> dict:
         "event_id": str(event_id),
     }
     location = raw.get("location")
-    if location:
-        raw_ref["index_hint"] = location
+    if location is not None:
+        raw_ref["index_hint"] = _optional_nonempty_str(location, "location")
 
     # --- Assemble canonical dict ---
+    namespaced_id = f"wazuh:{manager_name}:{event_id}"
     canonical: dict[str, Any] = {
-        "id": str(event_id),
+        "id": namespaced_id,
         "tenant_id": tenant_id,
-        "timestamp": timestamp_str,
+        "timestamp": canonical_timestamp,
         "source_adapter": "wazuh",
         "event_type": event_type.value,
         "source_ip": srcip,
@@ -185,20 +254,20 @@ def parse(raw: dict, *, tenant_id: str) -> dict:
     # --- Optional fields: omit when absent, raise when malformed ---
     dstuser = data.get("dstuser")
     if dstuser is not None:
-        canonical["target_user"] = dstuser
+        canonical["target_user"] = _optional_nonempty_str(dstuser, "data.dstuser")
 
     srcport = data.get("srcport")
     if srcport is not None:
-        try:
-            canonical["source_port"] = int(srcport)
-        except (TypeError, ValueError):
+        port = _require_int_not_bool(srcport, "data.srcport")
+        if port < 1 or port > 65535:
             raise WazuhParseError(
-                f"data.srcport must be an integer, got {srcport!r}"
-            ) from None
+                f"data.srcport out of range [1,65535]: {port}"
+            )
+        canonical["source_port"] = port
 
     protocol = data.get("protocol")
     if protocol is not None:
-        canonical["protocol"] = protocol
+        canonical["protocol"] = _optional_nonempty_str(protocol, "data.protocol")
 
     mitre = rule.get("mitre")
     if mitre is not None:
@@ -206,9 +275,9 @@ def parse(raw: dict, *, tenant_id: str) -> dict:
             raise WazuhParseError("rule.mitre must be a JSON object")
         canonical["enrichment"] = {
             "mitre": {
-                "id": list(mitre.get("id", [])),
-                "tactic": list(mitre.get("tactic", [])),
-                "technique": list(mitre.get("technique", [])),
+                "id": _mitre_list(mitre, "id"),
+                "tactic": _mitre_list(mitre, "tactic"),
+                "technique": _mitre_list(mitre, "technique"),
             }
         }
 

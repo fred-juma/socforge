@@ -1,0 +1,42 @@
+# detections/canonical/brute_force.yaml
+#
+# Brute-force detection — v0.1
+#
+# Fires once per active episode when at least `threshold.count` matching
+# alerts for the same (tenant_id, source_ip, target_user) arrive within
+# `threshold.window_seconds`. Alerts with no target_user do not
+# participate — a userless SSH failure cannot evidence a brute-force
+# attempt against a specific account.
+#
+# Episode semantics:
+#   - Fire on the alert that first reaches `threshold.count` in-window.
+#   - Suppress further hits until the in-window deque drops below
+#     `threshold.count` (i.e. enough old alerts age out).
+#   - Next time the deque crosses `threshold.count`, fire again (new episode).
+#   - window_start is anchored to the first alert of the episode and
+#     does not move while the episode is active.
+#
+# Window semantics:
+#   - Half-open [start, start + window_seconds). An alert exactly at
+#     start + window_seconds is OUTSIDE the window.
+#   - All timestamps are UTC-normalized by the adapter (Day 5).
+
+id: brute_force
+name: "SSH brute-force detected"
+description: >
+  Five or more authentication failures for the same source_ip and
+  target_user within 300 seconds. Classified as brute_force_detected.
+version: "0.1"
+
+match:
+  event_type: auth_failure
+
+threshold:
+  count: 5
+  window_seconds: 300
+
+group_by:
+  - source_ip
+  - target_user
+
+emit_event_type: brute_force_detected
